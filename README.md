@@ -12,8 +12,10 @@ RobustRunMetrics is a project aimed at developing and validating robust and pers
 - Integrate contextual variables (weather, elevation, time of day) to enhance predictions.
 - Validate models with official race results and, if possible, lab data.
 
+<pre markdown="1">
 ## Project Structure
 
+```plaintext
 RobustRunMetrics/
 │
 ├── data/                   # Raw and processed data
@@ -23,6 +25,9 @@ RobustRunMetrics/
 ├── docs/                   # Additional documentation
 ├── requirements.txt        # Python dependencies
 └── README.md               # Main documentation
+```
+</pre>
+
 
 ## Technologies and Libraries
 
