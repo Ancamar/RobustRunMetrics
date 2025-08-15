@@ -19,22 +19,37 @@ strava_client = StravaClient(
     client_secret=settings.strava_client_secret
 )
 
+def get_app_url():
+    """Obtiene la URL correcta de la aplicación"""
+    # Primero intentar usar APP_URL directamente
+    if settings.app_url:
+        # Asegurar que tenga https://
+        if settings.app_url.startswith('http'):
+            return settings.app_url
+        else:
+            return f"https://{settings.app_url}"
+    
+    # Si estamos en Railway, construir URL automáticamente
+    if os.getenv('RAILWAY_ENVIRONMENT') or os.getenv('PORT'):
+        return "https://web-production-bc31.up.railway.app"
+    
+    # Fallback local
+    return "http://localhost:8000"
+
 @app.on_event("startup")
 async def startup_event():
     """Inicialización de la aplicación"""
     create_tables()
-    # Detectar si estamos en Railway o local
-    railway_url = os.getenv('RAILWAY_STATIC_URL')
-    app_url = railway_url or settings.app_url
+    app_url = get_app_url()
     print(f"🚀 Servidor iniciado en: {app_url}")
     print(f"📋 Variables: CLIENT_ID={settings.strava_client_id[:8]}...")
+    print(f"🌐 APP_URL configurada: {settings.app_url}")
+    print(f"🔧 Railway ENV: {os.getenv('RAILWAY_ENVIRONMENT', 'No')}")
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
     """Página principal para autorización"""
-    # Usar URL de Railway si está disponible
-    railway_url = os.getenv('RAILWAY_STATIC_URL')
-    base_url = railway_url or settings.app_url
+    base_url = get_app_url()
     redirect_uri = f"{base_url}/callback"
     
     auth_url = strava_client.get_authorization_url(redirect_uri)
@@ -295,8 +310,7 @@ async def health_check(db: Session = Depends(get_db)):
         athlete_count = db.query(Athlete).count()
         activity_count = db.query(Activity).count()
         
-        railway_url = os.getenv('RAILWAY_STATIC_URL')
-        app_url = railway_url or settings.app_url
+        app_url = get_app_url()
         
         return {
             "status": "ok", 
@@ -305,7 +319,8 @@ async def health_check(db: Session = Depends(get_db)):
             "activities": activity_count,
             "database": "connected",
             "app_url": app_url,
-            "environment": "railway" if railway_url else "local"
+            "environment": "railway" if os.getenv('RAILWAY_ENVIRONMENT') else "local",
+            "app_url_config": settings.app_url
         }
     except Exception as e:
         return {
