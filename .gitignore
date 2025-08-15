@@ -1,4 +1,31 @@
-.Rproj.user
-.Rhistory
-.RData
-.Ruserdata
+# Crear .gitignore si no existe
+cat > .gitignore << 'EOF'
+# Variables de entorno
+.env
+
+# Base de datos local
+*.db
+strava_data.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+EOF
