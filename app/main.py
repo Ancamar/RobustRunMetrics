@@ -3,6 +3,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 import json
+import os
 from datetime import datetime, timedelta
 
 from .database import get_db, create_tables, Athlete, Activity
@@ -22,12 +23,20 @@ strava_client = StravaClient(
 async def startup_event():
     """Inicialización de la aplicación"""
     create_tables()
-    print(f"🚀 Servidor iniciado en: {settings.app_url}")
+    # Detectar si estamos en Railway o local
+    railway_url = os.getenv('RAILWAY_STATIC_URL')
+    app_url = railway_url or settings.app_url
+    print(f"🚀 Servidor iniciado en: {app_url}")
+    print(f"📋 Variables: CLIENT_ID={settings.strava_client_id[:8]}...")
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
     """Página principal para autorización"""
-    redirect_uri = f"{settings.app_url}/callback"
+    # Usar URL de Railway si está disponible
+    railway_url = os.getenv('RAILWAY_STATIC_URL')
+    base_url = railway_url or settings.app_url
+    redirect_uri = f"{base_url}/callback"
+    
     auth_url = strava_client.get_authorization_url(redirect_uri)
     
     html_content = f'''
@@ -42,6 +51,7 @@ async def home():
                     border-radius: 5px; display: inline-block; margin: 20px 0; }}
             .info {{ background: #e3f2fd; padding: 15px; border-radius: 5px; margin: 20px 0; }}
             .warning {{ background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; }}
+            .debug {{ background: #f8f9fa; padding: 10px; border-radius: 3px; font-size: 0.8em; color: #666; }}
         </style>
     </head>
     <body>
@@ -81,6 +91,10 @@ async def home():
         
         <div style="text-align: center; margin-top: 40px;">
             <a href="/stats" style="color: #FC4C02;">📈 Ver estadísticas del estudio</a>
+        </div>
+        
+        <div class="debug">
+            🔧 Debug info: Base URL = {base_url} | Callback = {redirect_uri}
         </div>
     </body>
     </html>
@@ -281,12 +295,17 @@ async def health_check(db: Session = Depends(get_db)):
         athlete_count = db.query(Athlete).count()
         activity_count = db.query(Activity).count()
         
+        railway_url = os.getenv('RAILWAY_STATIC_URL')
+        app_url = railway_url or settings.app_url
+        
         return {
             "status": "ok", 
             "timestamp": datetime.now(),
             "athletes": athlete_count,
             "activities": activity_count,
-            "database": "connected"
+            "database": "connected",
+            "app_url": app_url,
+            "environment": "railway" if railway_url else "local"
         }
     except Exception as e:
         return {
@@ -297,4 +316,5 @@ async def health_check(db: Session = Depends(get_db)):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
