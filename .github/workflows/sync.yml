@@ -1,56 +1,53 @@
-name: Sync Strava Data
+name: Daily Strava Sync
 
 on:
   schedule:
-    # Ejecutar diariamente a las 6:00 AM UTC (8:00 AM Madrid)
+    # Ejecutar diariamente a las 6:00 AM UTC
     - cron: '0 6 * * *'
-  
-  # Permitir ejecución manual
-  workflow_dispatch:
-    inputs:
-      days_back:
-        description: 'Días hacia atrás para sincronizar'
-        required: false
-        default: '7'
-        type: string
+  workflow_dispatch: # Permitir ejecución manual
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
     
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.11'
-    
-    - name: Cache dependencies
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
+        python-version: '3.9'
     
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
         pip install -r requirements.txt
     
-    - name: Run sync
+    - name: Run daily sync
       env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
         STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
         STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
-        DATABASE_URL: ${{ secrets.DATABASE_URL }}
         APP_URL: ${{ secrets.APP_URL }}
       run: |
-        python scripts/daily_sync.py --days ${{ github.event.inputs.days_back || '7' }}
+        python scripts/daily_sync.py --days 7
     
     - name: Notify on failure
       if: failure()
       run: |
-        echo "❌ Sincronización falló. Revisar logs."
-        # Aquí podrías agregar notificación por email/Slack
+        echo "❌ Sync failed - check logs"
+        # Aquí puedes agregar notificación por email o Slack
+
+  backup:
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 6 * * 0' # Solo domingos
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Create database backup
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      run: |
+        # Script de backup (adaptar según tu DB)
+        echo "Creating backup..."
+        # pg_dump $DATABASE_URL > backup_$(date +%Y%m%d).sql
