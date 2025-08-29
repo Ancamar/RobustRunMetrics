@@ -1,14 +1,22 @@
-from fastapi import FastAPI, Request, Depends, HTTPException, Query
+from fastapi import FastAPI, Request, Depends, HTTPException, Query, BackgroundTasks, Header
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from pydantic import BaseModel
 import json
 import os
+import subprocess
+import sys
+import logging
 from datetime import datetime, timedelta
 
 from .database import get_db, create_tables, Athlete, Activity
 from .strava_client import StravaClient
 from .config import settings
+
+# Configurar logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Inicializar app
 app = FastAPI(title="Strava Data Collector", version="1.0.0")
@@ -18,6 +26,11 @@ strava_client = StravaClient(
     client_id=settings.strava_client_id,
     client_secret=settings.strava_client_secret
 )
+
+# Modelo para request de sync
+class SyncRequest(BaseModel):
+    days: int = 7
+    action: str = "sync"
 
 def get_app_url():
     """Obtiene la URL correcta de la aplicación"""
@@ -328,6 +341,90 @@ async def health_check(db: Session = Depends(get_db)):
             "timestamp": datetime.now(),
             "error": str(e)
         }
+
+# ==========================================
+# NUEVOS ENDPOINTS WEBHOOK
+# ==========================================
+
+@app.post("/webhook/sync")
+async def webhook_sync(
+    sync_request: SyncRequest,
+    background_tasks: BackgroundTasks,
+    authorization: str = Header(None)
+):
+    """Webhook para trigger sincronización desde GitHub Actions"""
+    
+    # Verificar token de autorización
+    if not authorization or not authorization.startswith('Bearer '):
+        raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
+    
+    token = authorization.split(' ')[1]
+    if token != settings.sync_webhook_token:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    
+    # Ejecutar sincronización en background
+    background_tasks.add_task(run_sync_background, sync_request.days)
+    
+    logger.info(f"🔄 Sync triggered via webhook for {sync_request.days} days")
+    
+    return {
+        "status": "triggered",
+        "message": f"Sync started for last {sync_request.days} days",
+        "timestamp": datetime.now()
+    }
+
+@app.get("/api/sync/status")
+async def sync_status(db: Session = Depends(get_db)):
+    """Endpoint para verificar estado de sincronización"""
+    try:
+        # Obtener última sincronización
+        latest_sync = db.query(Athlete.last_sync).filter(
+            Athlete.is_active == True,
+            Athlete.last_sync.isnot(None)
+        ).order_by(Athlete.last_sync.desc()).first()
+        
+        # Contar actividades recientes
+        recent_activities = db.query(Activity).filter(
+            Activity.start_date >= datetime.now() - timedelta(hours=24)
+        ).count()
+        
+        # Contar atletas activos
+        active_athletes = db.query(Athlete).filter(Athlete.is_active == True).count()
+        
+        return {
+            "status": "ok",
+            "last_sync": latest_sync[0] if latest_sync else None,
+            "activities_last_24h": recent_activities,
+            "active_athletes": active_athletes,
+            "timestamp": datetime.now()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting sync status: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.now()
+        }
+
+async def run_sync_background(days: int):
+    """Ejecuta sincronización en background"""
+    try:
+        logger.info(f"🔄 Starting background sync for {days} days")
+        
+        # Ejecutar el script de sincronización
+        result = subprocess.run([
+            sys.executable, 'scripts/daily_sync.py', '--days', str(days)
+        ], capture_output=True, text=True, cwd='.')
+        
+        if result.returncode == 0:
+            logger.info("✅ Background sync completed successfully")
+            logger.info(f"Sync output: {result.stdout}")
+        else:
+            logger.error(f"❌ Background sync failed: {result.stderr}")
+        
+    except Exception as e:
+        logger.error(f"❌ Background sync exception: {e}")
 
 if __name__ == "__main__":
     import uvicorn

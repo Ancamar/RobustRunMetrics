@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     app_url: str = "http://localhost:8000"
     secret_key: str = "your-secret-key-change-this"
     
+    # Token para webhook de GitHub Actions
+    sync_webhook_token: str = "webhook-token-ultra-secreto-cambiar"
+    
     class Config:
         env_file = ".env"
         case_sensitive = False
@@ -30,3 +33,4 @@ print("🔍 DEBUG - Variables cargadas por pydantic:")
 print(f"   app_url: {settings.app_url}")
 print(f"   strava_client_id: {settings.strava_client_id}")
 print(f"   database_url: {settings.database_url}")
+print(f"   sync_webhook_token: {settings.sync_webhook_token[:10]}...")

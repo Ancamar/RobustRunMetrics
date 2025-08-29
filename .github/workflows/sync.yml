@@ -1,53 +1,75 @@
+# .github/workflows/sync.yml - VERSIÓN SIMPLIFICADA
 name: Daily Strava Sync
 
 on:
   schedule:
-    # Ejecutar diariamente a las 6:00 AM UTC
-    - cron: '0 6 * * *'
-  workflow_dispatch: # Permitir ejecución manual
+    - cron: '0 6 * * *'  # 6:00 AM UTC diariamente
+  workflow_dispatch:     # Permitir ejecución manual
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.9'
-    
-    - name: Install dependencies
+    - name: Trigger sync
+      id: sync
       run: |
-        pip install -r requirements.txt
-    
-    - name: Run daily sync
-      env:
-        DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
-        STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
-        APP_URL: ${{ secrets.APP_URL }}
-      run: |
-        python scripts/daily_sync.py --days 7
-    
-    - name: Notify on failure
-      if: failure()
-      run: |
-        echo "❌ Sync failed - check logs"
-        # Aquí puedes agregar notificación por email o Slack
+        echo "🚀 Starting Strava data sync..."
+        
+        # Hacer request al webhook
+        response=$(curl -s -w "HTTPSTATUS:%{http_code}" \
+          -X POST \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer ${{ secrets.SYNC_TOKEN }}" \
+          -d '{"days": 7}' \
+          "${{ secrets.RAILWAY_SYNC_WEBHOOK }}")
+        
+        # Extraer código HTTP y respuesta
+        http_code=$(echo $response | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
+        body=$(echo $response | sed -e 's/HTTPSTATUS\:.*//g')
+        
+        echo "Response code: $http_code"
+        echo "Response body: $body"
+        
+        # Verificar éxito
+        if [ $http_code -eq 200 ]; then
+          echo "✅ Sync triggered successfully"
+          echo "sync_status=success" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Sync failed with HTTP $http_code"
+          echo "sync_status=failed" >> $GITHUB_OUTPUT
+          exit 1
+        fi
 
-  backup:
-    runs-on: ubuntu-latest
-    if: github.event.schedule == '0 6 * * 0' # Solo domingos
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Create database backup
-      env:
-        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    - name: Wait and verify
+      if: steps.sync.outputs.sync_status == 'success'
       run: |
-        # Script de backup (adaptar según tu DB)
-        echo "Creating backup..."
-        # pg_dump $DATABASE_URL > backup_$(date +%Y%m%d).sql
+        echo "⏳ Waiting 60 seconds for sync to complete..."
+        sleep 60
+        
+        echo "🔍 Checking system health..."
+        health=$(curl -s "${{ secrets.RAILWAY_APP_URL }}/health" || echo "ERROR")
+        
+        echo "Health check result: $health"
+        
+        if echo "$health" | grep -q '"status":"ok"'; then
+          echo "✅ System is healthy after sync"
+        else
+          echo "⚠️ System health check inconclusive"
+        fi
+
+    - name: Report status
+      if: always()
+      run: |
+        echo "📋 SYNC SUMMARY"
+        echo "=============="
+        echo "Trigger status: ${{ steps.sync.outputs.sync_status }}"
+        echo "Timestamp: $(date)"
+        echo "Next sync: Tomorrow at 6:00 AM UTC"
+        
+        if [ "${{ steps.sync.outputs.sync_status }}" = "success" ]; then
+          echo "🎉 Daily sync completed successfully!"
+        else
+          echo "💥 Sync failed - check Railway logs for details"
+        fi
