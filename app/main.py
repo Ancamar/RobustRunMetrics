@@ -1,13 +1,16 @@
 from fastapi import FastAPI, Request, Depends, HTTPException, Query, BackgroundTasks, Header
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from pydantic import BaseModel
+from io import StringIO, BytesIO
 import json
 import os
 import subprocess
 import sys
 import logging
+import csv
+import zipfile
 from datetime import datetime, timedelta
 
 from .database import get_db, create_tables, Athlete, Activity
@@ -119,6 +122,8 @@ async def home():
         
         <div style="text-align: center; margin-top: 40px;">
             <a href="/stats" style="color: #FC4C02;">📈 Ver estadísticas del estudio</a>
+            <br><br>
+            <a href="/export/csv/activities" style="color: #007bff;">📄 Descargar datos CSV</a>
         </div>
         
         <div class="debug">
@@ -308,6 +313,13 @@ async def stats(db: Session = Depends(get_db)):
             <a href="/health" style="background: #17a2b8; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-left: 10px;">
                 🔧 Estado del sistema
             </a>
+            <br><br>
+            <a href="/export/csv/activities" style="background: #28a745; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">
+                📄 Descargar CSV
+            </a>
+            <a href="/export/backup" style="background: #ffc107; color: black; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-left: 10px;">
+                📦 Backup completo
+            </a>
         </div>
         
         <p style="text-align: center; color: #666; margin-top: 20px; font-size: 0.9em;">
@@ -343,7 +355,7 @@ async def health_check(db: Session = Depends(get_db)):
         }
 
 # ==========================================
-# NUEVOS ENDPOINTS WEBHOOK
+# ENDPOINTS WEBHOOK
 # ==========================================
 
 @app.post("/webhook/sync")
@@ -425,6 +437,306 @@ async def run_sync_background(days: int):
         
     except Exception as e:
         logger.error(f"❌ Background sync exception: {e}")
+
+# ==========================================
+# ENDPOINTS DE EXPORTACIÓN
+# ==========================================
+
+@app.get("/export/database")
+async def export_database(db: Session = Depends(get_db)):
+    """Exporta toda la base de datos como JSON"""
+    try:
+        # Exportar atletas
+        athletes = db.query(Athlete).all()
+        athletes_data = []
+        for athlete in athletes:
+            athletes_data.append({
+                'id': athlete.id,
+                'strava_id': athlete.strava_id,
+                'firstname': athlete.firstname,
+                'lastname': athlete.lastname,
+                'email': athlete.email,
+                'created_at': athlete.created_at.isoformat() if athlete.created_at else None,
+                'last_sync': athlete.last_sync.isoformat() if athlete.last_sync else None,
+                'is_active': athlete.is_active
+            })
+        
+        # Exportar actividades
+        activities = db.query(Activity).all()
+        activities_data = []
+        for activity in activities:
+            activities_data.append({
+                'id': activity.id,
+                'strava_id': activity.strava_id,
+                'athlete_id': activity.athlete_id,
+                'name': activity.name,
+                'sport_type': activity.sport_type,
+                'start_date': activity.start_date.isoformat() if activity.start_date else None,
+                'timezone': activity.timezone,
+                'elapsed_time': activity.elapsed_time,
+                'moving_time': activity.moving_time,
+                'distance': activity.distance,
+                'average_speed': activity.average_speed,
+                'max_speed': activity.max_speed,
+                'total_elevation_gain': activity.total_elevation_gain,
+                'average_heartrate': activity.average_heartrate,
+                'max_heartrate': activity.max_heartrate,
+                'average_cadence': activity.average_cadence,
+                'kudos_count': activity.kudos_count,
+                'comment_count': activity.comment_count,
+                'has_detailed_data': activity.has_detailed_data,
+                'raw_data': activity.raw_data,
+                'created_at': activity.created_at.isoformat() if activity.created_at else None,
+                'updated_at': activity.updated_at.isoformat() if activity.updated_at else None
+            })
+        
+        return {
+            "export_date": datetime.now().isoformat(),
+            "athletes": athletes_data,
+            "activities": activities_data,
+            "summary": {
+                "total_athletes": len(athletes_data),
+                "total_activities": len(activities_data)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error exporting database: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/export/csv/activities")
+async def export_activities_csv(db: Session = Depends(get_db)):
+    """Exporta actividades como CSV para análisis"""
+    try:
+        # Query con JOIN para obtener datos completos
+        query = db.query(
+            Activity.strava_id,
+            Activity.athlete_id,
+            Activity.name,
+            Activity.sport_type,
+            Activity.start_date,
+            Activity.timezone,
+            Activity.elapsed_time,
+            Activity.moving_time,
+            Activity.distance,
+            Activity.average_speed,
+            Activity.max_speed,
+            Activity.total_elevation_gain,
+            Activity.average_heartrate,
+            Activity.max_heartrate,
+            Activity.average_cadence,
+            Activity.kudos_count,
+            Activity.comment_count,
+            Activity.has_detailed_data,
+            Activity.created_at,
+            Athlete.firstname,
+            Athlete.lastname
+        ).join(Athlete, Activity.athlete_id == Athlete.strava_id).order_by(Activity.start_date.desc())
+        
+        activities = query.all()
+        
+        output = StringIO()
+        writer = csv.writer(output)
+        
+        # Headers optimizados para análisis
+        writer.writerow([
+            'strava_id', 'athlete_id', 'athlete_name', 'activity_name', 'sport_type',
+            'start_date', 'start_time', 'timezone', 'year', 'month', 'day_of_week',
+            'distance_km', 'distance_m', 'moving_time_min', 'moving_time_sec', 
+            'elapsed_time_min', 'elapsed_time_sec', 'average_speed_kmh', 'average_speed_ms',
+            'max_speed_kmh', 'max_speed_ms', 'pace_min_km', 'total_elevation_gain',
+            'average_heartrate', 'max_heartrate', 'average_cadence', 
+            'kudos_count', 'comment_count', 'has_detailed_data', 'created_at'
+        ])
+        
+        # Procesar datos
+        for row in activities:
+            (strava_id, athlete_id, name, sport_type, start_date, timezone, elapsed_time, 
+             moving_time, distance, avg_speed, max_speed, elevation, avg_hr, max_hr, 
+             cadence, kudos, comments, detailed, created_at, firstname, lastname) = row
+            
+            # Calcular campos derivados
+            athlete_name = f"{firstname or ''} {lastname or ''}".strip() or "Anónimo"
+            
+            # Fechas
+            date_str = start_date.strftime('%Y-%m-%d') if start_date else None
+            time_str = start_date.strftime('%H:%M:%S') if start_date else None
+            year = start_date.year if start_date else None
+            month = start_date.month if start_date else None
+            day_of_week = start_date.strftime('%A') if start_date else None
+            
+            # Distancias
+            distance_km = round(distance / 1000, 3) if distance else None
+            
+            # Tiempos
+            moving_min = round(moving_time / 60, 2) if moving_time else None
+            elapsed_min = round(elapsed_time / 60, 2) if elapsed_time else None
+            
+            # Velocidades
+            avg_speed_kmh = round(avg_speed * 3.6, 2) if avg_speed else None
+            max_speed_kmh = round(max_speed * 3.6, 2) if max_speed else None
+            
+            # Pace (min/km) - solo para running
+            pace_min_km = None
+            if sport_type and 'run' in sport_type.lower() and distance and moving_time and distance > 0:
+                pace_sec_per_m = moving_time / distance
+                pace_min_km = round((pace_sec_per_m * 1000) / 60, 2)
+            
+            writer.writerow([
+                strava_id, athlete_id, athlete_name, name, sport_type,
+                date_str, time_str, timezone, year, month, day_of_week,
+                distance_km, distance, moving_min, moving_time,
+                elapsed_min, elapsed_time, avg_speed_kmh, avg_speed,
+                max_speed_kmh, max_speed, pace_min_km, elevation,
+                avg_hr, max_hr, cadence, kudos, comments, detailed,
+                created_at.isoformat() if created_at else None
+            ])
+        
+        output.seek(0)
+        
+        # Nombre con timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"strava_activities_{timestamp}.csv"
+        
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+        
+    except Exception as e:
+        logger.error(f"Error exporting CSV: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/export/csv/athletes")
+async def export_athletes_csv(db: Session = Depends(get_db)):
+    """Exporta atletas como CSV"""
+    try:
+        athletes = db.query(Athlete).filter(Athlete.is_active == True).all()
+        
+        output = StringIO()
+        writer = csv.writer(output)
+        
+        writer.writerow([
+            'id', 'strava_id', 'firstname', 'lastname', 'full_name', 'email',
+            'created_at', 'last_sync', 'days_since_last_sync', 'is_active'
+        ])
+        
+        for athlete in athletes:
+            full_name = f"{athlete.firstname or ''} {athlete.lastname or ''}".strip()
+            
+            # Calcular días desde última sincronización
+            days_since_sync = None
+            if athlete.last_sync:
+                delta = datetime.now() - athlete.last_sync
+                days_since_sync = delta.days
+            
+            writer.writerow([
+                athlete.id, athlete.strava_id, athlete.firstname, athlete.lastname,
+                full_name, athlete.email,
+                athlete.created_at.isoformat() if athlete.created_at else None,
+                athlete.last_sync.isoformat() if athlete.last_sync else None,
+                days_since_sync, athlete.is_active
+            ])
+        
+        output.seek(0)
+        
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"strava_athletes_{timestamp}.csv"
+        
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+        
+    except Exception as e:
+        logger.error(f"Error exporting athletes CSV: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/export/backup")
+async def export_backup_zip(db: Session = Depends(get_db)):
+    """Exporta backup completo como ZIP con CSVs y JSON"""
+    try:
+        # Crear ZIP en memoria
+        zip_buffer = BytesIO()
+        
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            
+            # 1. CSV de actividades
+            activities_csv = StringIO()
+            activities_writer = csv.writer(activities_csv)
+            
+            # Headers para actividades
+            activities_writer.writerow([
+                'strava_id', 'athlete_id', 'athlete_name', 'activity_name', 'sport_type',
+                'start_date', 'distance_km', 'moving_time_min', 'average_speed_kmh',
+                'total_elevation_gain', 'average_heartrate', 'max_heartrate'
+            ])
+            
+            # Datos de actividades
+            activities_query = db.query(
+                Activity.strava_id, Activity.athlete_id, Activity.name, Activity.sport_type,
+                Activity.start_date, Activity.distance, Activity.moving_time, Activity.average_speed,
+                Activity.total_elevation_gain, Activity.average_heartrate, Activity.max_heartrate,
+                Athlete.firstname, Athlete.lastname
+            ).join(Athlete, Activity.athlete_id == Athlete.strava_id).all()
+            
+            for row in activities_query:
+                athlete_name = f"{row[11] or ''} {row[12] or ''}".strip()
+                activities_writer.writerow([
+                    row[0], row[1], athlete_name, row[2], row[3],
+                    row[4].isoformat() if row[4] else None,
+                    round(row[5] / 1000, 2) if row[5] else None,
+                    round(row[6] / 60, 2) if row[6] else None,
+                    round(row[7] * 3.6, 2) if row[7] else None,
+                    row[8], row[9], row[10]
+                ])
+            
+            activities_csv.seek(0)
+            zip_file.writestr('activities.csv', activities_csv.getvalue())
+            
+            # 2. CSV de atletas
+            athletes_csv = StringIO()
+            athletes_writer = csv.writer(athletes_csv)
+            athletes_writer.writerow(['strava_id', 'firstname', 'lastname', 'email', 'last_sync', 'is_active'])
+            
+            athletes = db.query(Athlete).all()
+            for athlete in athletes:
+                athletes_writer.writerow([
+                    athlete.strava_id, athlete.firstname, athlete.lastname, athlete.email,
+                    athlete.last_sync.isoformat() if athlete.last_sync else None,
+                    athlete.is_active
+                ])
+            
+            athletes_csv.seek(0)
+            zip_file.writestr('athletes.csv', athletes_csv.getvalue())
+            
+            # 3. JSON completo (como backup)
+            backup_data = {
+                "backup_date": datetime.now().isoformat(),
+                "athletes_count": db.query(Athlete).count(),
+                "activities_count": db.query(Activity).count(),
+                "note": "Backup completo de la base de datos Strava"
+            }
+            
+            zip_file.writestr('backup_info.json', json.dumps(backup_data, indent=2))
+        
+        zip_buffer.seek(0)
+        
+        # Nombre con timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"strava_backup_{timestamp}.zip"
+        
+        return StreamingResponse(
+            iter([zip_buffer.getvalue()]),
+            media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+        
+    except Exception as e:
+        logger.error(f"Error creating backup: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
