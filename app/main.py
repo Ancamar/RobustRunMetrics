@@ -653,6 +653,18 @@ async def export_athletes_csv(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error exporting athletes CSV: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/debug/get-token")
+async def get_debug_token(db: Session = Depends(get_db)):
+    """SOLO PARA DESARROLLO - Obtener token válido"""
+    athlete = db.query(Athlete).filter(Athlete.is_active == True).first()
+    if athlete and athlete.access_token:
+        return {
+            "access_token": athlete.access_token,
+            "athlete_name": f"{athlete.firstname} {athlete.lastname}",
+            "expires_at": athlete.token_expires_at
+        }
+    return {"error": "No token found"}
 
 @app.get("/export/backup")
 async def export_backup_zip(db: Session = Depends(get_db)):
