@@ -666,6 +666,31 @@ async def get_debug_token(db: Session = Depends(get_db)):
         }
     return {"error": "No token found"}
 
+@app.get("/debug/refresh-token")
+async def refresh_token_debug(db: Session = Depends(get_db)):
+    """Refresca token automáticamente"""
+    import time
+    
+    athlete = db.query(Athlete).filter(Athlete.is_active == True).first()
+    if not athlete or not athlete.refresh_token:
+        return {"error": "No refresh token found"}
+    
+    # Refrescar usando el cliente Strava
+    token_data = strava_client.refresh_token(athlete.refresh_token)
+    if not token_data:
+        return {"error": "Failed to refresh token"}
+    
+    # Actualizar en BD
+    athlete.access_token = token_data['access_token']
+    athlete.refresh_token = token_data['refresh_token']  
+    athlete.token_expires_at = token_data['expires_at']
+    db.commit()
+    
+    return {
+        "access_token": token_data['access_token'],
+        "expires_in_hours": (token_data['expires_at'] - int(time.time())) / 3600
+    }
+
 @app.get("/export/backup")
 async def export_backup_zip(db: Session = Depends(get_db)):
     """Exporta backup completo como ZIP con CSVs y JSON"""
