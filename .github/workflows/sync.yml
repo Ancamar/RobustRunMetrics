@@ -1,15 +1,16 @@
-# .github/workflows/sync.yml - REEMPLAZAR ARCHIVO COMPLETO
 name: Daily Strava Sync & Backup
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # 6:00 AM UTC diariamente
-  workflow_dispatch:     # Permitir ejecución manual
+    - cron: '0 6 * * *'
+  workflow_dispatch:
 
 jobs:
   sync-and-backup:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write
     
     steps:
       - name: Checkout repository
@@ -20,7 +21,6 @@ jobs:
         run: |
           echo "🚀 Starting Strava data sync..."
           
-          # Hacer request al webhook
           response=$(curl -s -w "HTTPSTATUS:%{http_code}" \
             -X POST \
             -H "Content-Type: application/json" \
@@ -28,14 +28,12 @@ jobs:
             -d '{"days": 7}' \
             "${{ secrets.RAILWAY_SYNC_WEBHOOK }}")
           
-          # Extraer código HTTP y respuesta
           http_code=$(echo $response | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
           body=$(echo $response | sed -e 's/HTTPSTATUS\:.*//g')
           
           echo "Response code: $http_code"
           echo "Response body: $body"
           
-          # Verificar éxito
           if [ $http_code -eq 200 ]; then
             echo "✅ Sync triggered successfully"
             echo "sync_status=success" >> $GITHUB_OUTPUT
@@ -61,7 +59,6 @@ jobs:
         run: |
           echo "📊 Downloading activities CSV..."
           
-          # Descargar CSV de actividades
           response_code=$(curl -s -w "%{http_code}" \
             -o "backups/strava_activities_$(date +%Y%m%d).csv" \
             "${{ secrets.RAILWAY_APP_URL }}/export/csv/activities")
@@ -80,7 +77,6 @@ jobs:
         run: |
           echo "👥 Downloading athletes CSV..."
           
-          # Descargar CSV de atletas
           response_code=$(curl -s -w "%{http_code}" \
             -o "backups/strava_athletes_$(date +%Y%m%d).csv" \
             "${{ secrets.RAILWAY_APP_URL }}/export/csv/athletes")
@@ -113,10 +109,8 @@ jobs:
       - name: Verify backups
         run: |
           echo "🔍 Verifying downloaded backups..."
-          
           ls -la backups/
           
-          # Verificar que los archivos no estén vacíos
           for file in backups/*.csv; do
             if [ -f "$file" ] && [ -s "$file" ]; then
               lines=$(wc -l < "$file")
@@ -128,14 +122,10 @@ jobs:
 
       - name: Commit and push backups
         run: |
-          # Configurar git
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          
-          # Agregar archivos de backup
           git add backups/
           
-          # Hacer commit si hay cambios
           if git diff --staged --quiet; then
             echo "📝 No new backup files to commit"
           else
@@ -147,26 +137,20 @@ jobs:
       - name: Clean old backups
         run: |
           echo "🧹 Cleaning old backup files..."
-          
-          # Mantener solo los últimos 30 días de CSVs
           find backups/ -name "*.csv" -type f -mtime +30 -delete
-          
-          # Mantener solo los últimos 12 backups completos (3 meses)
           find backups/ -name "*full_backup*.zip" -type f | sort | head -n -12 | xargs -r rm
-          
           echo "✅ Cleanup completed"
 
       - name: Health check
         run: |
           echo "🔍 Final health check..."
           health=$(curl -s "${{ secrets.RAILWAY_APP_URL }}/health" || echo "ERROR")
-          
           echo "Health check result: $health"
           
           if echo "$health" | grep -q '"status":"ok"'; then
-            echo "✅ System is healthy after sync & backup"
+            echo "✅ System is healthy"
           else
-            echo "⚠️ System health check inconclusive"
+            echo "⚠️ Health check inconclusive"
           fi
 
       - name: Report summary
@@ -175,15 +159,7 @@ jobs:
           echo "📋 DAILY SYNC & BACKUP SUMMARY"
           echo "=============================="
           echo "Date: $(date)"
-          echo "Sync status: ${{ steps.sync.outputs.sync_status }}"
-          echo "Activities backup: ${{ steps.backup_activities.outputs.activities_backup }}"
-          echo "Athletes backup: ${{ steps.backup_athletes.outputs.athletes_backup }}"
-          
-          if [ "${{ steps.sync.outputs.sync_status }}" = "success" ]; then
-            echo "🎉 Daily sync & backup completed successfully!"
-          else
-            echo "💥 Some operations failed - check logs above"
-          fi
-          
-          echo "Next sync: Tomorrow at 6:00 AM UTC"
+          echo "Sync: ${{ steps.sync.outputs.sync_status }}"
+          echo "Activities: ${{ steps.backup_activities.outputs.activities_backup }}"
+          echo "Athletes: ${{ steps.backup_athletes.outputs.athletes_backup }}"
           echo "=============================="
