@@ -12,7 +12,7 @@ import os
 from datetime import datetime
 
 class StravaDataDownloader:
-    def __init__(self, base_url="https://web-production-bc31.up.railway.app"):
+    def __init__(self, base_url="https://robust-run-metrics.up.railway.app"):
         self.base_url = base_url
         self.data_dir = "strava_data"
         

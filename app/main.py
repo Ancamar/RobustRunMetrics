@@ -47,7 +47,7 @@ def get_app_url():
     
     # Si estamos en Railway, construir URL automáticamente
     if os.getenv('RAILWAY_ENVIRONMENT') or os.getenv('PORT'):
-        return "https://web-production-bc31.up.railway.app"
+        return "https://robust-run-metrics.up.railway.app"
     
     # Fallback local
     return "http://localhost:8000"
